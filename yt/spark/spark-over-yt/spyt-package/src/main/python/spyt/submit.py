@@ -134,9 +134,9 @@ class SparkSubmissionClient(object):
         instance = super(SparkSubmissionClient, cls).__new__(cls)
         return instance
 
-    def __init__(self, gateway, proxy, discovery_path, spyt_version, user, token):
+    def __init__(self, gateway, proxy, discovery_path, spyt_version, user, token, proxy_network_name):
         self._jclient = gateway.jvm.tech.ytsaurus.spyt.submit.SubmissionClient(proxy, discovery_path,
-                                                                               spyt_version, user, token)
+                                                                               spyt_version, user, token, proxy_network_name)
         self.gateway = gateway
 
     def new_launcher(self):

@@ -10,7 +10,7 @@ def run_job(proxy, discovery_path, client_version):
         logging.info("Gateway created")
 
         submission_client = submit.SparkSubmissionClient(gateway, proxy, discovery_path, client_version,
-                                                         utils.default_user(), utils.default_token())
+                                                         utils.default_user(), utils.default_token(), None)
         logging.info("Submission client created")
 
         launcher = submission_client.new_launcher()

@@ -20,7 +20,8 @@ case class YtClientConfiguration(proxy: String,
                                  proxyRole: Option[String],
                                  byop: ByopConfiguration,
                                  masterWrapperUrl: Option[String],
-                                 extendedFileTimeout: Boolean) extends Serializable {
+                                 extendedFileTimeout: Boolean,
+                                 proxyNetworkName: Option[String]) extends Serializable {
 
   private def proxyUrl: Try[URL] = Try(new URL(proxy)).orElse {
     val normalizedProxy = if (proxy.contains(".") || proxy.contains(":")) {
@@ -71,17 +72,19 @@ object YtClientConfiguration {
         )
       ),
       getByName("masterWrapper.url"),
-      getByName("extendedFileTimeout").forall(_.toBoolean)
+      getByName("extendedFileTimeout").forall(_.toBoolean),
+      getByName("proxyNetworkName")
     )
   }
 
-  def default(proxy: String): YtClientConfiguration = default(
+  def default(proxy: String, proxyNetworkName: Option[String]): YtClientConfiguration = default(
     proxy = proxy,
     user = DefaultRpcCredentials.user,
-    token = DefaultRpcCredentials.token
+    token = DefaultRpcCredentials.token,
+    proxyNetworkName = proxyNetworkName
   )
 
-  def default(proxy: String, user: String, token: String): YtClientConfiguration = YtClientConfiguration(
+  def default(proxy: String, user: String, token: String, proxyNetworkName: Option[String]): YtClientConfiguration = YtClientConfiguration(
     proxy = proxy,
     user = user,
     token = token,
@@ -89,7 +92,8 @@ object YtClientConfiguration {
     proxyRole = None,
     byop = ByopConfiguration.DISABLED,
     masterWrapperUrl = None,
-    extendedFileTimeout = true
+    extendedFileTimeout = true,
+    proxyNetworkName = proxyNetworkName
   )
 
   def create(proxy: String,
@@ -99,9 +103,10 @@ object YtClientConfiguration {
              proxyRole: String,
              byop: ByopConfiguration,
              masterWrapperUrl: String,
-             extendedFileTimeout: Boolean) = new YtClientConfiguration(
+             extendedFileTimeout: Boolean,
+             proxyNetworkName: Option[String]) = new YtClientConfiguration(
     proxy, user, token, toScalaDuration(timeout),
-    Option(proxyRole), byop, Option(masterWrapperUrl), extendedFileTimeout
+    Option(proxyRole), byop, Option(masterWrapperUrl), extendedFileTimeout, proxyNetworkName
   )
 }
 

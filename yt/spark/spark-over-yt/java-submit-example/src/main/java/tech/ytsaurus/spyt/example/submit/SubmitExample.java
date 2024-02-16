@@ -13,7 +13,8 @@ public class SubmitExample {
                 "//home/taxi-dwh-dev/test/spark-discovery-3",
                 "1.5.1",
                 DefaultRpcCredentials.user(),
-                DefaultRpcCredentials.token()
+                DefaultRpcCredentials.token(),
+                null
         );
 
         InProcessLauncher launcher = client.newLauncher()

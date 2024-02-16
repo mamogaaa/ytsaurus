@@ -154,6 +154,7 @@ trait YtClientUtils {
       .setClusters(java.util.List.of[YTsaurusCluster](cluster))
       .setAuth(config.clientAuth)
       .setRpcOptions(rpcOptions)
+      .setProxyNetworkName(config.proxyNetworkName)
 
     if (config.isHttps) {
       clientBuilder.setConfig(YTsaurusClientConfig.builder().setUseTLS(true).build())

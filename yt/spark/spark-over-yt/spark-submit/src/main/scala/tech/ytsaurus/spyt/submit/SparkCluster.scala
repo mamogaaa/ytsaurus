@@ -13,8 +13,8 @@ case class SparkCluster(master: String,
                         masterHostAndPort: HostAndPort)
 
 object SparkCluster {
-  def get(proxy: String, discoveryPath: String, user: String, token: String): SparkCluster = {
-    val ytClient = YtWrapper.createRpcClient("submission client", YtClientConfiguration.default(proxy, user, token))
+  def get(proxy: String, discoveryPath: String, user: String, token: String, proxyNetworkName: Option[String]): SparkCluster = {
+    val ytClient = YtWrapper.createRpcClient("submission client", YtClientConfiguration.default(proxy, user, token, proxyNetworkName))
     try {
       implicit val yt = ytClient.yt
       val discoveryService = new CypressDiscoveryService(discoveryPath + "/discovery")
