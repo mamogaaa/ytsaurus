@@ -167,6 +167,7 @@ private:
     TAtomicIntrusivePtr<TSlotManagerDynamicConfig> DynamicConfig_;
 
     const int SlotCount_;
+    int ValidSlotCount_ = 0;
     const TString NodeTag_;
     const NContainers::TPortoHealthCheckerPtr PortoHealthChecker_;
 

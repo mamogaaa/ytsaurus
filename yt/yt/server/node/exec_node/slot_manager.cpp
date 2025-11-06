@@ -32,6 +32,13 @@
 
 #include <yt/yt/core/utilex/random.h>
 
+#ifdef _unix_
+#include <pwd.h>
+#include <errno.h>
+#endif
+
+#include <algorithm>
+
 namespace NYT::NExecNode {
 
 using namespace NContainers;
@@ -48,6 +55,19 @@ using namespace NYTree;
 ////////////////////////////////////////////////////////////////////////////////
 
 static const auto& Logger = ExecNodeLogger;
+
+////////////////////////////////////////////////////////////////////////////////
+
+static bool CheckUserExists(int uid)
+{
+#ifdef _unix_
+    errno = 0;
+    struct passwd* pwd = getpwuid(uid);
+    return pwd != nullptr && errno == 0;
+#else
+    return true;
+#endif
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -391,7 +411,9 @@ int TSlotManager::GetSlotCount() const
 {
     VERIFY_THREAD_AFFINITY_ANY();
 
-    return SlotCount_;
+    // Return ValidSlotCount_ if it has been initialized, otherwise return SlotCount_.
+    // This allows us to report fewer slots if some slot users don't exist.
+    return ValidSlotCount_ > 0 ? ValidSlotCount_ : SlotCount_;
 }
 
 int TSlotManager::GetUsedSlotCount() const
@@ -977,6 +999,47 @@ void TSlotManager::AsyncInitialize()
         }
 
         UpdateAliveLocations();
+
+        // Validate that all slot users exist in the system.
+        // If some users don't exist, remove their slots from the available pool.
+        auto environmentConfig = NYTree::ConvertTo<TJobEnvironmentConfigPtr>(StaticConfig_->JobEnvironment);
+        int startUid = environmentConfig->StartUid;
+
+        std::vector<int> invalidSlots;
+        for (int slotIndex = 0; slotIndex < SlotCount_; ++slotIndex) {
+            int uid = startUid + slotIndex;
+            if (!CheckUserExists(uid)) {
+                YT_LOG_WARNING("Slot user does not exist in the system, slot will be disabled (SlotIndex: %v, UID: %v, ExpectedUsername: yt_slot_%v)",
+                    slotIndex,
+                    uid,
+                    slotIndex);
+                invalidSlots.push_back(slotIndex);
+            }
+        }
+
+        if (!invalidSlots.empty()) {
+            // Remove invalid slots from the free slots queue
+            TRingQueue<int> validFreeSlots;
+            while (!FreeSlots_.empty()) {
+                int slotIndex = FreeSlots_.front();
+                FreeSlots_.pop();
+                if (std::find(invalidSlots.begin(), invalidSlots.end(), slotIndex) == invalidSlots.end()) {
+                    validFreeSlots.push(slotIndex);
+                }
+            }
+            FreeSlots_ = std::move(validFreeSlots);
+
+            YT_LOG_WARNING("Some slot users are missing in the system, reducing available slot count (ConfiguredSlotCount: %v, ValidSlotCount: %v, MissingSlots: %v)",
+                SlotCount_,
+                std::ssize(FreeSlots_),
+                invalidSlots);
+        }
+
+        ValidSlotCount_ = static_cast<int>(FreeSlots_.size());
+
+        YT_LOG_INFO("Slot user validation completed (ConfiguredSlotCount: %v, ValidSlotCount: %v)",
+            SlotCount_,
+            ValidSlotCount_);
 
         VerifyCurrentState(ESlotManagerState::Initializing);
 
