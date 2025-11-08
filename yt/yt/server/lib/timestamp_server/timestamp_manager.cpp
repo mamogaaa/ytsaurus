@@ -310,15 +310,47 @@ private:
             VERIFY_THREAD_AFFINITY(TimestampThread);
 
             Active_.store(true);
-            CurrentTimestamp_ = persistentTimestamp;
-            CommittedTimestamp_ = persistentTimestamp;
 
-            if (Config_->EmbedCellTag) {
-                CurrentTimestamp_ = EmbedCellTagIntoTimestamp(CurrentTimestamp_, CellTag_);
+            // EMERGENCY FIX: Handle changelog loss recovery
+            // When changelogs are lost without snapshots, PersistentTimestamp may be stale.
+            // We need to ensure CommittedTimestamp is ahead of current time to unblock timestamp allocation.
+            ui64 currentUnixTime = GetCurrentUnixTime();
+            ui64 persistentUnixTime = UnixTimeFromTimestamp(persistentTimestamp);
+
+            if (currentUnixTime > persistentUnixTime) {
+                // Persistent timestamp is stale (changelogs were lost)
+                // Force-set CommittedTimestamp to current time + preallocation interval
+                TTimestamp safeCurrentTimestamp = TimestampFromUnixTime(currentUnixTime);
+                TTimestamp safeCommittedTimestamp = TimestampFromUnixTime(
+                    currentUnixTime + Config_->TimestampPreallocationInterval.Seconds());
+
+                CurrentTimestamp_ = safeCurrentTimestamp;
+                CommittedTimestamp_ = safeCommittedTimestamp;
+
+                if (Config_->EmbedCellTag) {
+                    CurrentTimestamp_ = EmbedCellTagIntoTimestamp(CurrentTimestamp_, CellTag_);
+                }
+
+                YT_LOG_WARNING("Timestamp generator recovery mode activated: forcing timestamps "
+                    "(PersistentTimestamp: %v, CurrentTimestamp: %v, CommittedTimestamp: %v, "
+                    "PersistentUnixTime: %v, CurrentUnixTime: %v)",
+                    persistentTimestamp,
+                    CurrentTimestamp_,
+                    CommittedTimestamp_,
+                    persistentUnixTime,
+                    currentUnixTime);
+            } else {
+                // Normal recovery path
+                CurrentTimestamp_ = persistentTimestamp;
+                CommittedTimestamp_ = persistentTimestamp;
+
+                if (Config_->EmbedCellTag) {
+                    CurrentTimestamp_ = EmbedCellTagIntoTimestamp(CurrentTimestamp_, CellTag_);
+                }
+
+                YT_LOG_INFO("Timestamp generator is now active (PersistentTimestamp: %v)",
+                    persistentTimestamp);
             }
-
-            YT_LOG_INFO("Timestamp generator is now active (PersistentTimestamp: %v)",
-                persistentTimestamp);
         }).Via(invoker);
 
         ui64 deadlineTime = UnixTimeFromTimestamp(PersistentTimestamp_);
