@@ -51,6 +51,18 @@ bool IsOutOfDiskSpaceError(const TError& error)
     return ioError->Attributes().Get<int>("status") == ENOSPC;
 }
 
+// EMFILE/ENFILE are transient system-wide resource exhaustion errors,
+// not related to a specific disk location. Should not disable the location.
+bool IsResourceExhaustedError(const TError& error)
+{
+    auto ioError = error.FindMatching(NFS::EErrorCode::IOError);
+    if (!ioError) {
+        return false;
+    }
+    auto status = ioError->Attributes().Get<int>("status");
+    return status == EMFILE || status == ENFILE;
+}
+
 } // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -342,7 +354,7 @@ void TBlobSession::OnStarted(const TError& error)
                     "Error starting blob session for chunk %v",
                     GetChunkId())
                 << error,
-                /*fatal*/ true);
+                /*fatal*/ !IsResourceExhaustedError(error));
         }
     }
 }
@@ -405,7 +417,7 @@ TChunkInfo TBlobSession::OnFinished(const TError& error)
                     "Error writing blocks of chunk %v",
                     SessionId_)
                 << error,
-                /*fatal*/ true);
+                /*fatal*/ !IsResourceExhaustedError(error));
         }
     }
 
@@ -645,7 +657,7 @@ void TBlobSession::OnBlocksWritten(int beginBlockIndex, int endBlockIndex, const
                     "Error writing chunk %v",
                     GetChunkId())
                 << error,
-                /*fatal*/ true);
+                /*fatal*/ !IsResourceExhaustedError(error));
         }
         return;
     }
@@ -775,7 +787,7 @@ void TBlobSession::OnAborted(const TError& error)
                 "Error aborting chunk %v",
                 SessionId_)
             << error,
-            /*fatal*/ true);
+            /*fatal*/ !IsResourceExhaustedError(error));
     }
 }
 
