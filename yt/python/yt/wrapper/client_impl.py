@@ -2371,7 +2371,8 @@ class YtClient(ClientState):
             self,
             root='', node_type=None, path_filter=None, object_filter=None, subtree_filter=None,
             map_node_order=_MapOrderSorted(), list_node_order=None, attributes=None, exclude=None,
-            depth_bound=None, follow_links=False, read_from=None, cache_sticky_group_size=None, enable_batch_mode=None):
+            depth_bound=None, follow_links=False, read_from=None, cache_sticky_group_size=None,
+            enable_batch_mode=None, list_node_max_size=None):
         """
         Searches for some nodes in Cypress subtree.
 
@@ -2392,6 +2393,9 @@ class YtClient(ClientState):
         :param int depth_bound: recursion depth.
         :param bool follow_links: follow links.
         :param lambda action: apply given method to each found path.
+        :param int list_node_max_size: if set, enables safe traversal mode that uses `list` command
+        instead of `get` for directories. This prevents master overload on large directories.
+        Recommended value: 10000.
         :return: result paths as iterable over :class:`YsonString <yt.yson.yson_types.YsonString>`.
 
         """
@@ -2400,7 +2404,8 @@ class YtClient(ClientState):
             root=root, node_type=node_type, path_filter=path_filter, object_filter=object_filter,
             subtree_filter=subtree_filter, map_node_order=map_node_order, list_node_order=list_node_order,
             attributes=attributes, exclude=exclude, depth_bound=depth_bound, follow_links=follow_links,
-            read_from=read_from, cache_sticky_group_size=cache_sticky_group_size, enable_batch_mode=enable_batch_mode)
+            read_from=read_from, cache_sticky_group_size=cache_sticky_group_size, enable_batch_mode=enable_batch_mode,
+            list_node_max_size=list_node_max_size)
 
     def select_rows(
             self,

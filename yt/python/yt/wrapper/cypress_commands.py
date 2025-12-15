@@ -620,7 +620,7 @@ def find_free_subpath(path, client=None):
 def search(root="", node_type=None, path_filter=None, object_filter=None, subtree_filter=None,
            map_node_order=MAP_ORDER_SORTED, list_node_order=None, attributes=None,
            exclude=None, depth_bound=None, follow_links=False, read_from=None, cache_sticky_group_size=None,
-           enable_batch_mode=None, client=None):
+           enable_batch_mode=None, list_node_max_size=None, client=None):
     """Searches for some nodes in Cypress subtree.
 
     :param root: path to search.
@@ -640,6 +640,10 @@ def search(root="", node_type=None, path_filter=None, object_filter=None, subtre
     :param int depth_bound: recursion depth.
     :param bool follow_links: follow links.
     :param lambda action: apply given method to each found path.
+    :param int list_node_max_size: if set, enables safe traversal mode that uses `list` command
+        instead of `get` for directories. This prevents master overload on large directories.
+        When set, directories with more children than this limit will have their children
+        fetched separately. Recommended value: 10000.
     :return: result paths as iterable over :class:`YsonString <yt.yson.yson_types.YsonString>`.
     """
 
@@ -720,13 +724,14 @@ def search(root="", node_type=None, path_filter=None, object_filter=None, subtre
             to_native_string(content.attributes[to_response_key_type("type")]) != "document" or \
             to_native_string(content.attributes[to_response_key_type("type")]) in ("account_map", "tablet_cell", "portal_entrance")
 
-    def safe_batch_get(nodes, batch_client):
+    def safe_batch_get(nodes, batch_client, attributes_only=False):
         get_result = []
         for node in nodes:
+            get_path = node.path + "/@" if attributes_only else node.path
             get_result.append(
                 batch_client.get(
-                    node.path,
-                    attributes=request_attributes,
+                    get_path,
+                    attributes=request_attributes if not attributes_only else None,
                     read_from=read_from,
                     cache_sticky_group_size=cache_sticky_group_size))
         batch_client.commit_batch()
@@ -735,25 +740,64 @@ def search(root="", node_type=None, path_filter=None, object_filter=None, subtre
             try:
                 if content.get_error():
                     raise YtResponseError(content.get_error())
-                node.content = content.get_result()
+                result = content.get_result()
+                if attributes_only:
+                    # Convert attributes dict to YsonEntity with attributes
+                    node.content = yson.YsonEntity()
+                    node.content.attributes = result
+                else:
+                    node.content = result
             except YtResponseError as rsp:
                 if not process_response_error(rsp, node):
                     raise
             yield node
 
-    def safe_get(nodes, client):
+    def safe_get(nodes, client, attributes_only=False):
         for node in nodes:
             try:
-                node.content = get(
-                    node.path,
-                    attributes=request_attributes,
+                get_path = node.path + "/@" if attributes_only else node.path
+                result = get(
+                    get_path,
+                    attributes=request_attributes if not attributes_only else None,
                     client=client,
                     read_from=read_from,
                     cache_sticky_group_size=cache_sticky_group_size)
+                if attributes_only:
+                    # Convert attributes dict to YsonEntity with attributes
+                    node.content = yson.YsonEntity()
+                    node.content.attributes = result
+                else:
+                    node.content = result
             except YtResponseError as rsp:
                 if not process_response_error(rsp, node):
                     raise
             yield node
+
+    def safe_list_children(node_path, client):
+        """List children of a directory using the list command with proper pagination."""
+        try:
+            children = list(
+                node_path,
+                max_size=list_node_max_size,
+                attributes=request_attributes,
+                read_from=read_from,
+                cache_sticky_group_size=cache_sticky_group_size,
+                client=client)
+            is_incomplete = children.attributes.get("incomplete", False)
+            if is_incomplete:
+                logger.warning(
+                    "Directory %s has more than %d children, only first %d will be traversed. "
+                    "Increase list_node_max_size to traverse more.",
+                    node_path, list_node_max_size, list_node_max_size)
+            return children
+        except YtResponseError as rsp:
+            if rsp.is_access_denied():
+                logger.warning("Cannot list %s, access denied", node_path)
+                return []
+            raise
+
+    # Flag to use safe traversal mode
+    use_safe_traversal = list_node_max_size is not None
 
     if enable_batch_mode:
         batch_client = create_batch_client(client=client)
@@ -806,7 +850,25 @@ def search(root="", node_type=None, path_filter=None, object_filter=None, subtre
             yson_path = yson.to_yson_type(node.path, attributes=yson_path_attributes)
             yield yson_path
 
-        if isinstance(node.content, dict):
+        # In safe traversal mode, use list command to get children instead of
+        # relying on pre-fetched content. This prevents master overload on large directories.
+        if use_safe_traversal and object_type == "map_node" and not depth_limit_reached:
+            children = safe_list_children(node.path, client)
+            if map_node_order is not None:
+                # Sort children if order is specified
+                children_keys = [to_native_string(child) for child in children]
+                sorted_keys = map_node_order(node.path, {k: None for k in children_keys})
+                children_dict = {to_native_string(child): child for child in children}
+                children = [children_dict[k] for k in sorted_keys if k in children_dict]
+            for child in children:
+                if isinstance(child, yson.yson_types.YsonStringProxy):
+                    actual_key = to_response_key_type(escape_ypath_literal(yson.get_bytes(child)))
+                else:
+                    actual_key = escape_ypath_literal(to_native_string(child), encoding=encoding)
+                path = to_response_key_type("/").join([node.path, actual_key])
+                # Add child to request queue - content will be fetched in next iteration
+                nodes_to_request.append(CompositeNode(path, node.depth + 1))
+        elif isinstance(node.content, dict):
             if map_node_order is not None:
                 items_iter = ((key, node.content[key]) for key in map_node_order(node.path, node.content))
             else:
@@ -842,9 +904,9 @@ def search(root="", node_type=None, path_filter=None, object_filter=None, subtre
 
     while nodes_to_request:
         if enable_batch_mode:
-            nodes_to_process = safe_batch_get(nodes_to_request, batch_client)
+            nodes_to_process = safe_batch_get(nodes_to_request, batch_client, attributes_only=use_safe_traversal)
         else:
-            nodes_to_process = safe_get(nodes_to_request, client)
+            nodes_to_process = safe_get(nodes_to_request, client, attributes_only=use_safe_traversal)
         nodes_to_request = []
 
         for node in nodes_to_process:
