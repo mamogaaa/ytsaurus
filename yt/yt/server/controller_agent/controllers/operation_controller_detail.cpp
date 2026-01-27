@@ -7493,7 +7493,7 @@ void TOperationControllerBase::LockUserFiles()
     YT_LOG_INFO("Locking user files");
 
     auto proxy = CreateObjectServiceWriteProxy(OutputClient_);
-    auto batchReq = proxy.ExecuteBatch();
+    auto batchReq = proxy.ExecuteBatchWithRetries(OutputClient_->GetNativeConnection()->GetConfig()->ChunkFetchRetries);
 
     auto lockFile = [&batchReq] (TUserFile& file) {
         auto req = TFileYPathProxy::Lock(file.Path.GetPath());
