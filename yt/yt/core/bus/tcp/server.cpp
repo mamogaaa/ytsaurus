@@ -159,6 +159,7 @@ protected:
 
     YT_DECLARE_SPIN_LOCK(NThreading::TSpinLock, ControlSpinLock_);
     SOCKET ServerSocket_ = INVALID_SOCKET;
+    std::optional<TString> BoundUnixDomainSocketPath_;
 
     YT_DECLARE_SPIN_LOCK(NThreading::TSpinLock, ConnectionsSpinLock_);
     THashSet<TTcpConnectionPtr> Connections_;
@@ -211,8 +212,9 @@ protected:
     {
         if (ServerSocket_ != INVALID_SOCKET) {
             CloseSocket(ServerSocket_);
-            if (Config_->UnixDomainSocketPath) {
-                unlink(Config_->UnixDomainSocketPath->c_str());
+            if (BoundUnixDomainSocketPath_) {
+                unlink(BoundUnixDomainSocketPath_->c_str());
+                BoundUnixDomainSocketPath_.reset();
             }
             ServerSocket_ = INVALID_SOCKET;
             YT_LOG_DEBUG("Server socket closed");
@@ -416,7 +418,11 @@ private:
             if (Config_->UnixDomainSocketPath) {
                 // NB(gritukan): Unix domain socket path cannot be longer than 108 symbols, so let's try to shorten it.
                 // TODO(babenko): switch to std::string
-                netAddress = TNetworkAddress::CreateUnixDomainSocketAddress(NFS::GetShortestPath(TString(*Config_->UnixDomainSocketPath)));
+                BoundUnixDomainSocketPath_ = NFS::GetShortestPath(TString(*Config_->UnixDomainSocketPath));
+                // NB: Remove stale socket file if it exists from a previous run that didn't clean up properly.
+                // This prevents EADDRINUSE errors and lengthy retry delays.
+                unlink(BoundUnixDomainSocketPath_->c_str());
+                netAddress = TNetworkAddress::CreateUnixDomainSocketAddress(*BoundUnixDomainSocketPath_);
             } else {
                 netAddress = GetLocalBusAddress(*Config_->Port);
             }
