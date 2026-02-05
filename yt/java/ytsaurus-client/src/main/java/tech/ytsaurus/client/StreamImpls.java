@@ -527,7 +527,13 @@ class Stash {
     private boolean eof = false;
     private long offset = 0;
 
+    private volatile RpcClientStreamControl control = null;
+
     private final LinkedList<AbstractMap.SimpleEntry<byte[], Long>> attachments = new LinkedList<>();
+
+    void setControl(RpcClientStreamControl control) {
+        this.control = control;
+    }
 
     void push(Attachment attachment) throws Throwable {
         synchronized (attachments) {
@@ -539,6 +545,13 @@ class Stash {
             offset += attachment.getCompressedSize();
 
             attachments.addLast(new AbstractMap.SimpleEntry(attachment.getDecompressedBytes(), offset));
+
+            // Send feedback immediately when data is received to prevent server-side timeout.
+            // The server waits for feedback to confirm that client has received the data.
+            // Without this, slow clients would cause "Attachments stream write timed out" errors.
+            if (control != null) {
+                control.feedback(offset);
+            }
 
             if (needWakeup) {
                 this.readyEvent.complete(null);
@@ -553,13 +566,14 @@ class Stash {
         }
     }
 
-    byte[] pop(RpcClientStreamControl control) {
+    byte[] pop() {
         synchronized (attachments) {
             if (attachments.isEmpty()) {
                 return null;
             } else {
                 AbstractMap.SimpleEntry<byte[], Long> message = attachments.removeFirst();
-                control.feedback(message.getValue());
+                // Feedback is now sent immediately in push() when data is received,
+                // so we don't need to send it here anymore.
                 eof = message.getKey() == null;
                 return message.getKey();
             }
@@ -645,6 +659,7 @@ abstract class StreamReaderImpl<RspType extends Message> extends StreamBase<RspT
     @Override
     public void onStartStream(RpcClientStreamControl control) {
         super.onStartStream(control);
+        stash.setControl(control);
         control.sendEof();
     }
 
@@ -677,7 +692,7 @@ abstract class StreamReaderImpl<RspType extends Message> extends StreamBase<RspT
     }
 
     CompletableFuture<byte[]> readHead() {
-        return getReadyEvent().thenApply((unused) -> stash.pop(control));
+        return getReadyEvent().thenApply((unused) -> stash.pop());
     }
 
     boolean doCanRead() {
@@ -690,7 +705,7 @@ abstract class StreamReaderImpl<RspType extends Message> extends StreamBase<RspT
             return null;
         }
 
-        return stash.pop(control);
+        return stash.pop();
     }
 
     CompletableFuture<Void> getReadyEvent() {
