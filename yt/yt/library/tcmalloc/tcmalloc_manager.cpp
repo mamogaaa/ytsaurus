@@ -21,6 +21,8 @@
 
 #include <tcmalloc/malloc_extension.h>
 
+#include <sys/mman.h>
+
 #include <thread>
 #include <mutex>
 
@@ -430,6 +432,85 @@ private:
 
 ////////////////////////////////////////////////////////////////////////////////
 
+#ifdef MADV_HUGEPAGE
+
+class THugePageAddressRegion
+    : public tcmalloc::AddressRegion
+{
+public:
+    explicit THugePageAddressRegion(tcmalloc::AddressRegion* underlying)
+        : Underlying_(underlying)
+    { }
+
+    std::pair<void*, size_t> Alloc(size_t size, size_t alignment) override
+    {
+        auto result = Underlying_->Alloc(size, alignment);
+        if (result.first != nullptr) {
+            // Advisory only, ignore errors.
+            ::madvise(result.first, result.second, MADV_HUGEPAGE);
+        }
+        return result;
+    }
+
+private:
+    tcmalloc::AddressRegion* const Underlying_;
+};
+
+class THugePageRegionFactory
+    : public tcmalloc::AddressRegionFactory
+{
+public:
+    explicit THugePageRegionFactory(tcmalloc::AddressRegionFactory* underlying)
+        : Underlying_(underlying)
+    { }
+
+    static THugePageRegionFactory* Allocate(tcmalloc::AddressRegionFactory* underlying)
+    {
+        void* memory = MallocInternal(sizeof(THugePageRegionFactory));
+        if (!memory) {
+            return nullptr;
+        }
+        return new (memory) THugePageRegionFactory(underlying);
+    }
+
+    tcmalloc::AddressRegion* Create(void* start, size_t size, UsageHint hint) override
+    {
+        auto* region = Underlying_->Create(start, size, hint);
+        if (!region) {
+            return nullptr;
+        }
+
+        // Only enable THP for normal and metadata regions.
+        // Cold and sampled regions use MADV_NOHUGEPAGE for fine-grained telemetry.
+        if (hint == UsageHint::kInfrequentAccess || hint == UsageHint::kInfrequentAllocation) {
+            return region;
+        }
+
+        void* memory = MallocInternal(sizeof(THugePageAddressRegion));
+        if (!memory) {
+            return region;
+        }
+        return new (memory) THugePageAddressRegion(region);
+    }
+
+    size_t GetStats(absl::Span<char> buffer) override
+    {
+        return Underlying_->GetStats(buffer);
+    }
+
+    size_t GetStatsInPbtxt(absl::Span<char> buffer) override
+    {
+        return Underlying_->GetStatsInPbtxt(buffer);
+    }
+
+private:
+    tcmalloc::AddressRegionFactory* const Underlying_;
+};
+
+#endif // MADV_HUGEPAGE
+
+////////////////////////////////////////////////////////////////////////////////
+
 class TTCMallocManagerImpl
 {
 public:
@@ -452,6 +533,20 @@ public:
             tcmalloc::MallocExtension::SetGuardedSamplingInterval(*config->GuardedSamplingRate);
             tcmalloc::MallocExtension::ActivateGuardedSampling();
         }
+
+#ifdef MADV_HUGEPAGE
+        if (config->EnableTransparentHugePages) {
+            std::call_once(InitTransparentHugePages_, [] {
+                auto* currentFactory = tcmalloc::MallocExtension::GetRegionFactory();
+                if (currentFactory) {
+                    auto* factory = THugePageRegionFactory::Allocate(currentFactory);
+                    if (factory) {
+                        tcmalloc::MallocExtension::SetRegionFactory(factory);
+                    }
+                }
+            });
+        }
+#endif
 
         Config_.Store(config);
 
@@ -501,6 +596,7 @@ private:
 
     TAtomicIntrusivePtr<TTCMallocConfig> Config_;
     std::once_flag InitAggressiveReleaseThread_;
+    std::once_flag InitTransparentHugePages_;
 };
 
 ////////////////////////////////////////////////////////////////////////////////

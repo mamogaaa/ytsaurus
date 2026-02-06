@@ -93,6 +93,10 @@ struct TTCMallocConfig
 
     THeapSizeLimitConfigPtr HeapSizeLimit;
 
+    //! If true, tcmalloc will use madvise(MADV_HUGEPAGE) on allocated regions,
+    //! enabling transparent huge pages even when the kernel is in "madvise" mode.
+    bool EnableTransparentHugePages;
+
     TTCMallocConfigPtr ApplyDynamic(const TDynamicTCMallocConfigPtr& dynamicConfig) const;
 
     REGISTER_YSON_STRUCT(TTCMallocConfig);

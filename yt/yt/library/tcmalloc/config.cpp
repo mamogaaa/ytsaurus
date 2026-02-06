@@ -116,6 +116,9 @@ void TTCMallocConfig::Register(TRegistrar registrar)
 
     registrar.Parameter("heap_size_limit", &TThis::HeapSizeLimit)
         .DefaultNew();
+
+    registrar.Parameter("enable_transparent_huge_pages", &TThis::EnableTransparentHugePages)
+        .Default(false);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
