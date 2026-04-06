@@ -3663,7 +3663,9 @@ bool TOperationControllerBase::OnJobAborted(
 
         GetJobProfiler()->ProfileAbortedJob(*joblet, *jobSummary);
 
-        OnJobFinished(std::move(jobSummary), retainJob);
+        // Retain aborted jobs that have stderr so their logs are preserved
+        // and available for debugging after the abort.
+        OnJobFinished(std::move(jobSummary), retainJob || joblet->StderrSize > 0);
 
         auto finallyGuard = Finally([&] {
             ReleaseJobs({jobId});
@@ -5898,6 +5900,14 @@ void TOperationControllerBase::OnJobFinished(std::unique_ptr<TJobSummary> summar
         }
 
         coreInfoCount = jobResultExtension.core_infos().size();
+    }
+
+    // Use stderr size from heartbeats as a fallback. This is important for
+    // aborted jobs where the job result may not contain stderr info (e.g.
+    // scheduler-initiated aborts), but the job proxy had already reported
+    // non-zero stderr size via heartbeats.
+    if (!hasStderr && joblet->StderrSize > 0) {
+        hasStderr = true;
     }
 
     ReportControllerStateToArchive(joblet, summary->State);
